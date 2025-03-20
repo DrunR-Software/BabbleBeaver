@@ -8,6 +8,26 @@ BabbleBeaver aims to democratize conversational AI, offering a plug-and-play sol
 
 ## Installation
 
+## Setting Up the `local.env` File for Development
+
+To run the application on a local machine for development, you need to set up a `local.env` file. This file contains environment variables required by the application. Follow the steps below to create and configure the `local.env` file:
+
+1. **Create the `local.env` File:**
+    - In the root directory of your project, create a new file named `local.env`.
+
+2. **Use the Example File:**
+    - To get started quickly, you can use the `example-local.env` file provided in the project. This file contains example environment variables and their default values.
+    - Copy the contents of `example-local.env` into your newly created `local.env` file.
+
+3. **Configure Environment Variables:**
+    - Open the `local.env` file in a text editor.
+    - Update the values of the environment variables as needed for your local development setup. Ensure that all required variables are properly configured.
+
+4. **Save the File:**
+    - Save the `local.env` file after making the necessary changes.
+
+By following these steps, you will have a properly configured `local.env` file that allows you to run the application on your local machine for development purposes.
+
 ### Running the FastAPI application locally
 
 - Make sure you have Python installed on your machine. You can download and install Python from the official website: https://www.python.org/downloads/
