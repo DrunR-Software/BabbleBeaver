@@ -20,7 +20,7 @@ typing_extensions
 ujson==5.8.0
 uvicorn
 watchfiles==0.19.0
-websockets==11.0.3
+websockets>=11.0.3
 requests
 openai==1.35.4
 google-genai>=0.6.0
