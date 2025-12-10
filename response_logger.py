@@ -2,7 +2,7 @@ import os
 import uuid
 from datetime import datetime
 
-from sqlalchemy import create_engine, Column, String, DateTime
+from sqlalchemy import Integer, create_engine, Column, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -14,7 +14,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Define the ChatHistory model
 class ChatHistory(Base):
     __tablename__ = "user_chats"
-    session_id = Column(String, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)  # Add this
+    session_id = Column(String, index=True)  # Remove primary_key=True
     sender = Column(String)
     message = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
@@ -42,6 +43,7 @@ class ChatLogger:
         try:
             records = db.query(ChatHistory).filter(ChatHistory.session_id == session_id).all()
             print("records:", records)
+            print("records count:", len(records))
             return records
         finally:
             db.close()
