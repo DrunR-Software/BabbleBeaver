@@ -276,7 +276,7 @@ async def chatbot(request: Request):
     endpoint_id = os.getenv("ENDPOINT_ID")
     
     data = await request.json()
-    user_message, history, tokens, session_id = data.get("prompt"), data.get("history"), data.get("tokens") , '12344412'       
+    user_message, history, tokens, session_id = data.get("prompt"), data.get("history"), data.get("tokens") , data.get("session_id", '12344412')
 
     full_prompt = f"""You are a helpful assistant that provides resaurant names and menu items to questions for users in Seattle. 
         Answer the following user question using ONLY the relevant restaurant and product details provided below. Be specific, concise, and friendly. 
