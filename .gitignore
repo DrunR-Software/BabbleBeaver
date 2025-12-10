@@ -173,3 +173,6 @@ cython_debug/
 
 # asset class
 /assets
+
+# Claude
+.claude
