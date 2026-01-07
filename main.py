@@ -24,8 +24,8 @@ import vertexai
 from vertexai.preview.generative_models import  GenerativeModel
 from google.cloud import aiplatform, bigquery
 
-import google.generativeai as genai
-from google.generativeai import types
+from google import genai
+from google.genai import types
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -302,27 +302,43 @@ def generate_from(user_prompt, project_id, location, endpoint_id):
     model_version = None
     total_token_count = None
 
-    for chunk in client.models.generate_content_stream(
-        model = model,
-        contents = contents,
-        config = generate_content_config,
-        ):
-        try:
-            parts = chunk.candidates[0].content.parts
-            for part in parts:
-                if hasattr(part, "text"):
-                    full_text += part.text
+    try:
+        for chunk in client.models.generate_content_stream(
+            model = model,
+            contents = contents,
+            config = generate_content_config,
+            ):
+            try:
+                # Primary: Try direct text access (most reliable)
+                if hasattr(chunk, 'text') and chunk.text:
+                    full_text += chunk.text
+                # Fallback: Parse candidates structure
+                elif hasattr(chunk, 'candidates') and chunk.candidates:
+                    parts = chunk.candidates[0].content.parts
+                    for part in parts:
+                        if hasattr(part, "text"):
+                            full_text += part.text
 
-            if model_version is None and hasattr(chunk, "model_version"):
-                model_version = chunk.model_version
+                # Extract model version (usually in first chunk)
+                if model_version is None and hasattr(chunk, "model_version"):
+                    model_version = chunk.model_version
 
-            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                usage = chunk.usage_metadata
-                if hasattr(usage, "total_token_count") and usage.total_token_count:
-                    total_token_count = usage.total_token_count
+                # Extract token count (usually in last chunk)
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    usage = chunk.usage_metadata
+                    if hasattr(usage, "total_token_count") and usage.total_token_count:
+                        total_token_count = usage.total_token_count
 
-        except Exception as e:
-            print("Error while parsing chunk:", e)
+            except AttributeError as e:
+                logger.warning(f"Error parsing chunk attribute: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Error while parsing chunk: {e}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Error during content generation: {e}")
+        raise
 
     parsed_output = {
         "text": full_text.strip(),
@@ -424,7 +440,7 @@ async def chatbot(request: Request):
     endpoint_id = os.getenv("ENDPOINT_ID")
     
     data = await request.json()
-    user_message, history, tokens, session_id = data.get("prompt"), data.get("history"), data.get("tokens") , '12344412'       
+    user_message, history, tokens, session_id = data.get("prompt"), data.get("history"), data.get("tokens") , data.get("session_id", '12344412')
 
     # Similarity Search from BigQuery vectorDB
     search_results = vector_search_restaurants(
