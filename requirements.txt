@@ -35,7 +35,9 @@ numpy
 scikit-learn
 scipy
 matplotlib
-
-# Database support
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.9
+sqlalchemy
+psycopg2-binary
+cloud-sql-python-connector[pg8000]
+google-auth
+google-auth-oauthlib
+google-cloud-bigquery
