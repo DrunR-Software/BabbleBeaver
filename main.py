@@ -20,7 +20,7 @@ from response_logger import ChatLogger
 from google.cloud import aiplatform
 import vertexai
 from vertexai.preview.generative_models import  GenerativeModel
-from google.cloud import aiplatform
+from google.cloud import aiplatform, bigquery
 
 import google.generativeai as genai
 from google.generativeai import types
@@ -58,6 +58,7 @@ PROJECT_NAME = os.getenv("PROJECT_NAME")
 LOCATION = os.getenv("LOCATION")
 ENDPOINT_ID = os.getenv("ENDPOINT_ID")
 
+bq_client = bigquery.Client(project=PROJECT_ID)
 vertexai.init(project=PROJECT_NAME, location=LOCATION)
 model = GenerativeModel(os.getenv("FINE_TUNED_MODEL"))
 aiplatform.init(
@@ -85,17 +86,20 @@ UPLOAD_DIR = "secure_credentials"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 CREDENTIALS_PATH = os.path.abspath(os.path.join(UPLOAD_DIR, "service_account.json"))
 
+
 def ensure_google_credentials_env():
     """Set the GOOGLE_APPLICATION_CREDENTIALS env var if the file exists."""
     if os.path.exists(CREDENTIALS_PATH):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
         logger.info(f"Set GOOGLE_APPLICATION_CREDENTIALS to {CREDENTIALS_PATH}")
 
+
 def credentials_needed(provider: str):
     if provider.lower() in ["gemini", "vertex", "vertexai"]:
         logger.info(f"Checking for credentials file at: {CREDENTIALS_PATH}")
         return not os.path.exists(CREDENTIALS_PATH)
     return False
+
 
 @app.get("/upload_credentials", response_class=HTMLResponse)
 async def upload_credentials_form(request: Request):
@@ -112,6 +116,7 @@ async def upload_credentials_form(request: Request):
     """
     return HTMLResponse(content=html_content)
 
+
 @app.post("/upload_credentials")
 async def upload_credentials(file: UploadFile = File(...)):
     if not file.filename.endswith(".json"):
@@ -123,6 +128,7 @@ async def upload_credentials(file: UploadFile = File(...)):
     ensure_google_credentials_env()
     logger.info(f"Credentials uploaded and saved to {save_path}")
     return RedirectResponse(url="/", status_code=303)
+
 
 def call_function_from_file(folder_path, module_name, function_name):
     module_path = os.path.join(folder_path, f"{module_name}.py")
@@ -171,9 +177,50 @@ async def post_response(keyword: str):
     logger.error("Failed to fetch news.")
     return JSONResponse({"error": "Failed to fetch news"}, status_code=500)
 
+
 @app.get("/", response_class=HTMLResponse)
 async def chat_view(request: Request):
     return templates.TemplateResponse("chat.html", {"request": request})
+
+
+'''
+Vectorize messages with Cosine sim
+'''
+def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
+    """Search for similar restaurants using BigQuery vector search"""
+    
+    sql = f"""
+        SELECT DISTINCT
+        base.restaurant,
+        base.dish,
+        base.summary,
+        base.tags,
+        distance
+        FROM VECTOR_SEARCH(
+        TABLE `208535887371.restaurant_data.seattle_data_with_embeddings`,
+        'ml_generate_embedding_result',
+        (
+            SELECT ml_generate_embedding_result
+            FROM ML.GENERATE_EMBEDDING(
+            MODEL `208535887371.restaurant_data.embedding_model`,
+            (SELECT @query_text AS content),
+            STRUCT(TRUE AS flatten_json_output)
+            )
+        ),
+        top_k => 30
+        )
+        LIMIT 10
+    """
+    
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("query_text", "STRING", query_text),
+            bigquery.ScalarQueryParameter("top_k", "INT64", top_k)
+        ]
+    )
+    
+    results = bq_client.query(sql, job_config=job_config).to_dataframe()
+    return results.to_dict('records')
 
 
 '''
@@ -253,6 +300,91 @@ def generate_from(user_prompt, project_id, location, endpoint_id):
     }
     return parsed_output
 
+def generate_from_v2(user_query: str, search_results: list, project_id, location, endpoint_id) -> str:
+    """Optimized version - fewer tokens, better accuracy"""
+    client = genai.Client(
+        vertexai=True,
+        project=project_id,
+        location=location,
+    )
+
+    top_results = search_results[:3]
+    model=endpoint_id
+    generate_content_config = types.GenerateContentConfig(
+        temperature = .7,
+        top_p = 0.95,
+        seed = 0,
+        max_output_tokens = 5000,
+        safety_settings = [types.SafetySetting(
+            category="HARM_CATEGORY_HATE_SPEECH",
+            threshold="OFF"
+        ),types.SafetySetting(
+            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold="OFF"
+        ),types.SafetySetting(
+            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold="OFF"
+        ),types.SafetySetting(
+            category="HARM_CATEGORY_HARASSMENT",
+            threshold="OFF"
+        )],
+            thinking_config=types.ThinkingConfig(
+            thinking_budget=-1,
+        ),
+    )
+    
+    context = ""
+    for idx, result in enumerate(top_results, 1):
+        dish = result.get('dish', 'Unknown dish')
+        restaurant = result.get('restaurant', 'Unknown restaurant')
+        summary = result.get('summary', '')
+        context += f"{idx}. {dish} - {restaurant}\n"
+        
+        if any(word in user_query.lower() for word in ['protein', 'calorie', 'healthy', 'nutrition', 'macro']):
+            calories = result.get('calories')
+            protein = result.get('protein')
+            fat = result.get('fat')
+            carbs = result.get('carbs')
+            
+            if calories and protein:
+                context += f"   Nutrition: {calories}cal, {protein}g protein, {fat}g fat, {carbs}g carbs\n"
+        else:
+            context += f"   {summary}\n"
+    
+    prompt = f"""User wants: {user_query}
+    Top matches:
+    {context}
+    Based on these search results, provide a helpful, conversational recommendation. Include:
+    1. Your top 2-3 recommendations with brief explanations why they match
+    2. Key nutritional highlights if relevant to their request
+    3. Any dietary considerations or alternatives
+    4. Be friendly and concise (1-2 sentences max)
+    """
+
+    chunk = client.models.generate_content(
+        model = model,
+        contents = prompt,
+        config = generate_content_config
+    )
+    
+    text = chunk.candidates[0].content.parts[0].text
+
+    # if model_version is None and hasattr(chunk, "model_version"):
+    #     model_version = chunk.model_version
+
+    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+        usage = chunk.usage_metadata
+        if hasattr(usage, "total_token_count") and usage.total_token_count:
+            total_token_count = usage.total_token_count
+
+    parsed_output = {
+        "text": text.strip(),
+        "model_version": 1.5,
+        "total_token_count": total_token_count
+    }
+    
+    return parsed_output
+
 
 @app.post("/chatbot")
 async def chatbot(request: Request):
@@ -263,17 +395,24 @@ async def chatbot(request: Request):
     data = await request.json()
     user_message, history, tokens, session_id = data.get("prompt"), data.get("history"), data.get("tokens") , '12344412'       
 
+    # Similarity Search from BigQuery vectorDB
+    search_results = vector_search_restaurants(
+            query_text=user_message,
+            top_k=20
+        )
+
     full_prompt = f"""You are a helpful assistant that provides resaurant names and menu items to questions for users in Seattle. 
         Answer the following user question using ONLY the relevant restaurant and product details provided below. Be specific, concise, and friendly. 
         User Question:
         {user_message}
         """
     
-    print(user_message)
+    # print(user_message)
 
     response_logger.insert_message(session_id, "user", user_message)
 
-    response = generate_from(full_prompt, project_id, location, endpoint_id)
+    # response = generate_from(full_prompt, project_id, location, endpoint_id)
+    response = generate_from_v2(user_message, search_results, project_id, location, endpoint_id)
     response_dict = response
 
     message_logger.log_message(user_message, session_id)
