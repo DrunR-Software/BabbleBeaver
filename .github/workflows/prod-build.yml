@@ -57,7 +57,7 @@ jobs:
         TARGET_BRANCH: "main"
         IMAGE_TAG: "build-${{ github.run_number }}"
       run: |
-        echo "🚀 Updating Dev manifest to use $IMAGE_NAME:$IMAGE_TAG"
+        echo "🚀 Updating Prod manifest to use $IMAGE_NAME:$IMAGE_TAG"
 
         # Clone the ops repository
         git clone https://x-access-token:$GITHUB_TOKEN@github.com/$TARGET_REPO.git ops-repo
@@ -85,9 +85,9 @@ jobs:
         if git diff --staged --quiet; then
           echo "ℹ️  No changes to commit - manifest already up to date"
         else
-          git commit -m "🚀 Deploy sensor-service:$IMAGE_TAG to Dev
+          git commit -m "🚀 Deploy babblebeaver:$IMAGE_TAG to Production
 
-        Automated deployment from sensor_service repository
+        Automated deployment from babblebeaver repository
         Source commit: ${{ github.sha }}
         Triggered by: ${{ github.actor }}
         Build number: ${{ github.run_number }}
