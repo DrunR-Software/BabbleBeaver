@@ -42,3 +42,4 @@ google-auth
 google-auth-oauthlib
 google-cloud-bigquery
 google-generativeai
+db_dtypes
