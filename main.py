@@ -68,37 +68,7 @@ aiplatform.init(
     location=LOCATION
 )
 
-# FastAPI app instance
-app = FastAPI(debug=True)
-
-# Middleware for CORS
-# Configure allowed origins from environment or use defaults
-cors_origins = os.getenv("CORS_ALLOWED_DOMAINS", "").strip()
-
-if cors_origins:
-    # Use domains from .env if specified
-    allowed_origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
-else:
-    # Default origins for local development and production
-    allowed_origins = [
-        "http://localhost:8000",
-        "http://localhost:3000",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:3000",
-        # Add your production domains here or in .env
-        # "https://your-production-domain.com",
-    ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv("CORS_ALLOWED_DOMAINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-# Static and template mounting
-templates = Jinja2Templates(directory="templates")
+# Static and template mounting is done above (lines 44-45)
 
 UPLOAD_DIR = "secure_credentials"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
