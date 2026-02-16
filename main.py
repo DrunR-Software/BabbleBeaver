@@ -6,6 +6,7 @@ import importlib.util
 from random import sample
 from typing import Optional
 import sys
+import uuid
 
 from fastapi import FastAPI, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -403,7 +404,7 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
     return parsed_output
 
 
-@app.post("/chatbot")
+@app.post("/chatbot2")
 async def chatbot(request: Request):
     project_id = os.getenv("PROJECT_ID")
     location = os.getenv("LOCATION")
@@ -437,3 +438,62 @@ async def chatbot(request: Request):
     response_logger.insert_message(session_id, "bot", response_dict['text'])
 
     return {'prompt': full_prompt, 'user_prompt': user_message, 'kai_response': response_dict['text'], 'model_version': response_dict['model_version'], 'history': "response_logger.select_all_messages(session_id)", 'tokens': response_dict['total_token_count']}
+
+
+'''
+Vectorize messages with Cosine sim
+'''
+def dhub_user_post(post_id: str, user_id: str, text: str, food_card_id: str) -> list:
+    """Search for similar restaurants using BigQuery vector search"""
+    
+    # Insert sample post
+    sample_data = {
+        'id': str(uuid.uuid4()),  # e.g., "550e8400-e29b-41d4-a716-446655440000"
+        'user_id': str(uuid.uuid4()),  # e.g., "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        'text': 'Just tried the Nashville hot chicken at Fire & Spice - absolutely incredible! The heat level is perfect and the coating is so crispy. Highly recommend! 🔥',
+        'food_card_id': str(uuid.uuid4()),  # e.g., "3f4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f"
+        'created_at': "2026-02-14"  # e.g., "2025-02-15T14:30:00.123456"
+    }
+
+    query = """
+        INSERT INTO `drunr-prod.dhub.posts`
+        (id, user_id, text, food_card_id, reply_count, like_count, is_deleted, created_at, updated_at)
+        VALUES (@id, @user_id, @text, @food_card_id, 0, 0, FALSE, @created_at, @created_at)
+    """
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("id", "STRING", sample_data['id']),
+            bigquery.ScalarQueryParameter("user_id", "STRING", sample_data['user_id']),
+            bigquery.ScalarQueryParameter("text", "STRING", sample_data['text']),
+            bigquery.ScalarQueryParameter("food_card_id", "STRING", sample_data['food_card_id']),
+            bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", sample_data['created_at']),
+        ]
+    )
+
+    query_job = bq_client.query(query, job_config=job_config)
+    query_job.result()
+    
+    return True
+
+
+@app.post("/chatbot")
+async def chatbot(request: Request):
+    project_id = os.getenv("PROJECT_ID")
+    location = os.getenv("LOCATION")
+    endpoint_id = os.getenv("ENDPOINT_ID")
+
+    data = await request.json()
+
+    print("DATA: ", data)
+
+    # Similarity Search from BigQuery vectorDB
+    search_results = dhub_user_post(
+            post_id="12344412",
+            user_id="12344412",
+            text="TEST FOOD DHUB POST",
+            food_card_id="Null"
+        )
+    
+    print("search_results: ", search_results)
+    
