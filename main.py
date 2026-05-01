@@ -1,5 +1,5 @@
 # main.py
-from http.client import HTTPException
+from fastapi import HTTPException
 import os
 import logging
 import importlib.util
@@ -13,16 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-import openai  # Corrected import
+import openai
 from ai_configurator import AIConfigurator
 from message_logger import MessageLogger
 from response_logger import ChatLogger
 
-import google.generativeai as genai
-from google.cloud import aiplatform
-import vertexai
-from vertexai.preview.generative_models import  GenerativeModel
 from google.cloud import aiplatform, bigquery
+import vertexai
+from vertexai.preview.generative_models import GenerativeModel
 
 from google import genai
 from google.genai import types
@@ -30,19 +28,6 @@ from google.genai import types
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = FastAPI(debug=True)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv("CORS_ALLOWED_DOMAINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 ai_configurator = AIConfigurator()
 message_logger = MessageLogger()
@@ -98,6 +83,7 @@ app.add_middleware(
 )
 
 # Static and template mounting
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 UPLOAD_DIR = "secure_credentials"
@@ -223,9 +209,14 @@ def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
     sql = f"""
         SELECT DISTINCT
         base.restaurant,
+        base.restaurant_id,
         base.dish,
         base.summary,
         base.tags,
+        base.category,
+        base.calories,
+        base.protein,
+        base.carbohydrates,
         distance
         FROM VECTOR_SEARCH(
         TABLE `208535887371.restaurant_data.seattle_data_with_embeddings`,
@@ -242,14 +233,14 @@ def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
         )
         LIMIT 10
     """
-    
+
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("query_text", "STRING", query_text),
             bigquery.ScalarQueryParameter("top_k", "INT64", top_k)
         ]
     )
-    
+
     results = bq_client.query(sql, job_config=job_config).to_dataframe()
     return results.to_dict('records')
 
@@ -258,95 +249,6 @@ def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
 Generate answer with genai(kai_fine_2_5_v2) client from Vertex AI
 return dict
 '''
-def generate_from(user_prompt, project_id, location, endpoint_id):
-    client = genai.Client(
-        vertexai=True,
-        project=project_id,
-        location=location,
-    )
-
-    model=endpoint_id
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(text=user_prompt)
-            ]
-        )
-    ]
-
-    generate_content_config = types.GenerateContentConfig(
-        temperature = 1,
-        top_p = 1,
-        seed = 0,
-        max_output_tokens = 65535,
-        safety_settings = [types.SafetySetting(
-        category="HARM_CATEGORY_HATE_SPEECH",
-        threshold="OFF"
-        ),types.SafetySetting(
-        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-        threshold="OFF"
-        ),types.SafetySetting(
-        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        threshold="OFF"
-        ),types.SafetySetting(
-        category="HARM_CATEGORY_HARASSMENT",
-        threshold="OFF"
-        )],
-        thinking_config=types.ThinkingConfig(
-        thinking_budget=-1,
-        ),
-    )
-
-    full_text = ""
-    model_version = None
-    total_token_count = None
-
-    try:
-        for chunk in client.models.generate_content_stream(
-            model = model,
-            contents = contents,
-            config = generate_content_config,
-            ):
-            try:
-                # Primary: Try direct text access (most reliable)
-                if hasattr(chunk, 'text') and chunk.text:
-                    full_text += chunk.text
-                # Fallback: Parse candidates structure
-                elif hasattr(chunk, 'candidates') and chunk.candidates:
-                    parts = chunk.candidates[0].content.parts
-                    for part in parts:
-                        if hasattr(part, "text"):
-                            full_text += part.text
-
-                # Extract model version (usually in first chunk)
-                if model_version is None and hasattr(chunk, "model_version"):
-                    model_version = chunk.model_version
-
-                # Extract token count (usually in last chunk)
-                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                    usage = chunk.usage_metadata
-                    if hasattr(usage, "total_token_count") and usage.total_token_count:
-                        total_token_count = usage.total_token_count
-
-            except AttributeError as e:
-                logger.warning(f"Error parsing chunk attribute: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Error while parsing chunk: {e}")
-                continue
-
-    except Exception as e:
-        logger.error(f"Error during content generation: {e}")
-        raise
-
-    parsed_output = {
-        "text": full_text.strip(),
-        "model_version": model_version,
-        "total_token_count": total_token_count
-    }
-    return parsed_output
-
 def generate_from_v2(user_query: str, search_results: list, project_id, location, endpoint_id) -> str:
     """Optimized version - fewer tokens, better accuracy"""
     client = genai.Client(
@@ -358,10 +260,10 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
     top_results = search_results[:3]
     model=endpoint_id
     generate_content_config = types.GenerateContentConfig(
-        temperature = .7,
-        top_p = 0.95,
+        temperature = 0.3,
+        top_p = 0.35,
         seed = 0,
-        max_output_tokens = 5000,
+        max_output_tokens = 500,
         safety_settings = [types.SafetySetting(
             category="HARM_CATEGORY_HATE_SPEECH",
             threshold="OFF"
@@ -376,7 +278,7 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
             threshold="OFF"
         )],
             thinking_config=types.ThinkingConfig(
-            thinking_budget=-1,
+            thinking_budget=256,
         ),
     )
     
@@ -385,27 +287,46 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
         dish = result.get('dish', 'Unknown dish')
         restaurant = result.get('restaurant', 'Unknown restaurant')
         summary = result.get('summary', '')
+        category = result.get('category', '')
+
         context += f"{idx}. {dish} - {restaurant}\n"
-        
-        if any(word in user_query.lower() for word in ['protein', 'calorie', 'healthy', 'nutrition', 'macro']):
-            calories = result.get('calories')
-            protein = result.get('protein')
-            fat = result.get('fat')
-            carbs = result.get('carbs')
-            
-            if calories and protein:
-                context += f"   Nutrition: {calories}cal, {protein}g protein, {fat}g fat, {carbs}g carbs\n"
-        else:
-            context += f"   {summary}\n"
-    
-    prompt = f"""User wants: {user_query}
-    Top matches:
+        context += f"   {summary}\n"
+        if category:
+            context += f"   Category: {category}\n"
+
+        # Nutrition from flat columns
+        parts = []
+        if result.get('calories'):
+            parts.append(f"{result['calories']} cal")
+        if result.get('protein'):
+            parts.append(f"{result['protein']} protein")
+        if result.get('carbohydrates'):
+            parts.append(f"{result['carbohydrates']} carbs")
+        if parts:
+            context += f"   Nutrition: {', '.join(parts)}\n"
+
+    prompt = f"""
+    You are Kai, DrunR's AI nutrition guide.
+    Keep answers short unless the user asks for detail.
+    Default answer length: 3 bullets or fewer.
+    Avoid long paragraphs.
+    Avoid repeating the user's question.
+    End with one clear next action when useful.
+
+    User request:
+    {user_query}
+
+    Available menu results:
     {context}
-    Based on these search results, provide a helpful, conversational recommendation. Include:
-    1. Your top 2-3 recommendations with brief explanations why they match
-    2. Key nutritional highlights if relevant to their request
-    3. Any dietary considerations or alternatives
-    4. Be friendly and concise (1-2 sentences max)
+
+    Rules:
+    - Use ONLY the available menu results above.
+    - Do NOT invent nutrition, ingredients, restaurant details, or health claims.
+    - If a required field is missing, say it is not available yet.
+    - Prioritize GLP-1-friendly patterns when relevant: higher protein, moderate calories,
+    lower added sugar, avoid very heavy/fried options when possible.
+    - Be friendly, practical, and concise.
+    - Do not provide medical advice.
     """
 
     chunk = client.models.generate_content(
