@@ -138,6 +138,15 @@ async def fetch_user_context(
             )
             if isinstance(providers, dict):
                 providers = providers.get("results", [])
+
+            # Recently logged meals (what the user actually ate) — lets Kai ground
+            # picks/reasoning in past foods, not just biometrics.
+            meals_resp = await client.get(
+                "/meallog/", params={**params, "period": "week"}
+            )
+            meal_logs = meals_resp.json() if meals_resp.status_code == 200 else []
+            if isinstance(meal_logs, dict):
+                meal_logs = meal_logs.get("results", [])
     except Exception as e:
         logger.warning("Failed to fetch user context from user_service: %s", e)
         return None
@@ -150,6 +159,7 @@ async def fetch_user_context(
             p.get("provider_slug") for p in providers if p.get("provider_slug")
         ],
         "biometrics": biometrics if isinstance(biometrics, dict) else {},
+        "recent_meals": meal_logs if isinstance(meal_logs, list) else [],
     }
 
 
@@ -208,6 +218,27 @@ def format_user_context(ctx: Optional[Dict[str, Any]]) -> str:
         )
         if readings:
             lines.append(f"- Recent Biometrics (as of {as_of}): {readings}")
+
+    meals = ctx.get("recent_meals") or []
+    if meals:
+        lines.append("- Recently Logged Meals (most recent first):")
+        for m in meals[:8]:
+            if not isinstance(m, dict):
+                continue
+            name = m.get("name") or "Unnamed meal"
+            macros = ", ".join(
+                f"{label}={_fmt_num(m[key])}{unit}"
+                for key, label, unit in (
+                    ("calories", "cal", ""),
+                    ("protein", "protein", "g"),
+                    ("carbs", "carbs", "g"),
+                    ("fat", "fat", "g"),
+                )
+                if m.get(key)
+            )
+            day = (m.get("logged_at") or "")[:10]
+            detail = " — ".join(p for p in (macros, day) if p)
+            lines.append(f"    - {name}" + (f" ({detail})" if detail else ""))
 
     # Only a header and nothing else means no usable data.
     return "\n".join(lines) if len(lines) > 1 else ""
