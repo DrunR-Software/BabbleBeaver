@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -572,14 +573,27 @@ _SIGNAL_KEYS: Dict[str, List[str]] = {
     "sat_fat_g": ["saturated_fat", "sat_fat", "saturated_fat_g"],
     "sodium_mg": ["sodium", "sodium_mg"],
     "water_l": ["water", "water_l", "hydration", "water_intake"],
-    "active_minutes": ["active_minutes", "active_min", "exercise_minutes"],
+    # Genuine "minutes of activity" synonyms only. NOT active_calories (kcal, a
+    # different quantity) — mapping that would be an estimate, not a measurement.
+    "active_minutes": [
+        "active_minutes", "active_min", "exercise_minutes",
+        "moderate_to_vigorous_minutes", "mvpa_minutes", "active_duration_min",
+    ],
     "temperature_f": ["temperature", "temp_f", "ambient_temp"],
     "sleep_hours": ["sleep_hours", "sleep_duration", "sleep"],
-    "sleep_efficiency_pct": ["sleep_efficiency", "sleep_efficiency_pct"],
-    "sleep_timing_variation_min": ["sleep_timing_variation", "sleep_consistency_min"],
-    "sleep_debt_hours": ["sleep_debt", "sleep_debt_hours"],
+    "sleep_efficiency_pct": ["sleep_efficiency", "sleep_efficiency_pct", "efficiency_pct"],
+    "sleep_timing_variation_min": [
+        "sleep_timing_variation", "sleep_consistency_min",
+        "bedtime_variation_min", "sleep_midpoint_variation_min",
+    ],
+    "sleep_debt_hours": ["sleep_debt", "sleep_debt_hours", "sleep_deficit_hours"],
     "steps": ["steps", "step_count", "daily_steps"],
-    "weekly_exercise_sessions": ["weekly_exercise_sessions", "exercise_sessions"],
+    # Count of sessions only. NOT the "workouts" 0-100 activity score user_service
+    # sends (unit=score) — that's a rating, not a session count.
+    "weekly_exercise_sessions": [
+        "weekly_exercise_sessions", "exercise_sessions",
+        "workout_sessions", "training_sessions", "workouts_per_week",
+    ],
     "current_activity_level": ["current_activity_level", "activity_level"],
     "baseline_activity_level": ["baseline_activity_level", "activity_baseline"],
     "tir_pct": ["time_in_range", "tir", "tir_pct"],
@@ -637,6 +651,30 @@ def inputs_from_context(ctx: Optional[Dict[str, Any]]) -> ScoringInputs:
         val = _lookup_signal(biometrics, candidates)
         if val is not None:
             setattr(inputs, field_name, val)
+
+    # Nutrition from today's logged meals (daily adherence). Sum only genuine
+    # macros MealLog carries — calories and protein. Fiber/sugar/sodium aren't
+    # logged, so those scores stay incomplete rather than estimated.
+    # Compare in UTC: MealLog.logged_at is stored/serialized in UTC.
+    today = datetime.now(timezone.utc).date().isoformat()
+    cals = prot = 0.0
+    logged_today = False
+    for meal in ctx.get("recent_meals") or []:
+        if not isinstance(meal, dict):
+            continue
+        if (meal.get("logged_at") or "")[:10] != today:
+            continue
+        logged_today = True
+        try:
+            cals += float(meal.get("calories") or 0)
+            prot += float(meal.get("protein") or 0)
+        except (TypeError, ValueError):
+            continue
+    if logged_today:
+        if inputs.calories_consumed is None:
+            inputs.calories_consumed = cals
+        if inputs.protein_g is None:
+            inputs.protein_g = prot
 
     # CGM gating: a connected CGM provider implies connection + consent (the
     # provider link is only created after the user consents in user_service).
