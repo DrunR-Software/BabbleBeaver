@@ -334,6 +334,9 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
       the actual menu results and their profile/health data when present.
     - Offer to narrow it down once they answer. Do NOT lecture or pick for them
       unless they ask you to. Keep it to a few sentences — skip the 3-part format.
+    - When the user's data is present, anchor at least one question to a concrete
+      detail (e.g. "since your steps are low today, want something lighter?") so
+      they can see your reasoning is grounded in their own metrics.
 
     RECOMMENDATION MODE — use this for normal requests where the user wants a
     suggestion. Reply in exactly these three parts, with no headers shown to the
@@ -343,10 +346,14 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
        meal and/or a restaurant from the menu results. Name the dish and the spot,
        and one quick reason each. Keep it to a couple of sentences, not a long list.
 
-    2. **Why this fits you:** 1-2 short bullets that highlight the specific user
-       profile detail(s) and recent health data you used (e.g. "your resting heart
-       rate is steady at 48 bpm" or "you're pescatarian and avoiding dairy"). Only
-       mention data that is actually present in the USER HEALTH PROFILE above.
+    2. **Why this fits you:** 1-2 short bullets that make your reasoning explicit —
+       name the specific data point(s) that drove the pick and tie each to the dish.
+       Draw from, in order of usefulness: the KAI HEALTH SCORES (e.g. "your activity
+       is low today, so I leaned higher-protein"), recent biometrics (e.g. "your
+       resting heart rate is steady at 48 bpm"), profile/dietary preferences (e.g.
+       "you're pescatarian and avoiding dairy"), and any recent meals if shown.
+       Only mention data actually present in the USER HEALTH PROFILE / KAI HEALTH
+       SCORES above — never invent metrics, scores, or past foods.
 
     3. A single friendly closing line with one clear next step (a question or
        suggestion).
@@ -356,8 +363,9 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
       nutrition, ingredients, restaurant details, or health claims.
     - In INDECISION MODE, only reference dishes/restaurants that appear in the menu
       results above when framing your questions.
-    - If the user profile or health data is empty, skip part 2 gracefully rather
-      than guessing — just give the picks and the closing line.
+    - Always include a brief reason for your pick. If the user profile and health
+      data are both empty, base part 2 on the dish's own merits (e.g. "it's the
+      higher-protein option here") rather than guessing about the user.
     - Respect dietary preferences, allergies, and GLP-1 medication when present.
     - Favor GLP-1-friendly patterns when relevant: higher protein, moderate
       calories, lower added sugar, lighter/non-fried options.
