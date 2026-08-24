@@ -76,10 +76,15 @@ $(document).ready(function () {
     let sessionNumTokens = sessionStorage.getItem("totalUsedTokens");
     let localNumTokens = sessionNumTokens ? JSON.parse(sessionNumTokens) : 0;
 
+    // Identity: forward a Bearer JWT (set via localStorage.userToken) so the
+    // backend can resolve core_user_uuid and pull user_profile context.
+    const userToken = localStorage.getItem("userToken");
+
     $.ajax({
       url: '/chatbot',
       type: 'POST',
       contentType: 'application/json',
+      headers: userToken ? { Authorization: 'Bearer ' + userToken } : {},
       data: JSON.stringify({prompt: userMessage, history: localMessageHistory, tokens: localNumTokens}),
       success: function (data) {
         console.log("data: ", data);

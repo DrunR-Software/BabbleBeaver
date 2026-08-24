@@ -22,16 +22,23 @@ Access at http://localhost:8000 | API docs at http://localhost:8000/docs
 - `llm_manager.py` — Multi-provider fallback manager
 - `database.py` — SQLAlchemy ORM models (incl. `DailyScore` snapshots)
 - `context_manager.py` — Conversation context handling
+- `context_builder.py` — Builds context-aware system prompts from user/product/session context
 - `user_context.py` — Fetches user health profile/biometrics from user_service
 - `scoring.py` — Deterministic Kai MAI scoring engine (implements SCORING.md)
 - `daily_scores.py` — Persists/retrieves daily score snapshots (drift baselines)
 - `SCORING.md` — Authoritative scoring rules (18 rules + meal-level mode)
+- `auth.py` — API key auth (env token legacy + DB-backed tokens, admin credentials)
+- `token_manager.py` — Database-backed API token storage/validation (SQLite, no JWT)
+- `message_logger.py` / `response_logger.py` — Chat message & response history logging
+- `prompt_metrics.py` — Per-turn prompt performance metrics (latency, tokens, errors); powers `/prompt-dashboard`
+- `ai_retrainer.py` — Model retraining via external API endpoints
 - `cost_estimator.py` — Multi-provider cost comparison
 - `model_config/` — Model definitions (model_config.ini)
 - `templates/` — HTML UI (chat, admin)
 - `static/` — Frontend assets
 - `modules/` — Feature modules (buildly-collect, digitalocean, gemini)
-- `tools/` — Test & migration utilities
+- `tools/` — Test, seed & migration utilities
+- `devdocs/` — Developer docs (DATABASE.md, DIGITALOCEAN_AGENT.md)
 - `ops/` — Operations (PID management)
 
 ## Key Commands
@@ -40,9 +47,15 @@ Access at http://localhost:8000 | API docs at http://localhost:8000/docs
 python3 tools/migrate_database.py --dry-run
 python3 tools/migrate_database.py
 
+# Seed sample data
+python3 tools/seed_test_meals.py
+
 # Tests
 python3 tools/test_database.py
 python3 tools/test_context_aware.py
+python3 tools/test_full_context.py
+python3 tools/test_user_context.py
+python3 tools/test_digitalocean.py
 python3 tools/test_scoring.py   # scoring engine unit tests (pure, no network)
 ```
 

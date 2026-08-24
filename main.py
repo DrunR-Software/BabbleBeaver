@@ -1,11 +1,18 @@
 # main.py
 from fastapi import HTTPException
 import os
+import time
 import logging
 import importlib.util
 from random import sample
 from typing import Optional
 import sys
+
+from dotenv import load_dotenv
+
+# Load .env before anything reads env vars (e.g. GOOGLE_APPLICATION_CREDENTIALS,
+# which the GCP client libraries consume when the clients are constructed below).
+load_dotenv()
 
 from fastapi import FastAPI, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +24,7 @@ import openai
 from ai_configurator import AIConfigurator
 from message_logger import MessageLogger
 from response_logger import ChatLogger
+from prompt_metrics import PromptMetricsLogger
 from user_context import fetch_user_context, format_user_context, resolve_identity
 from daily_scores import upsert_daily_scores
 
@@ -34,6 +42,11 @@ logger = logging.getLogger(__name__)
 ai_configurator = AIConfigurator()
 message_logger = MessageLogger()
 response_logger = ChatLogger()
+prompt_metrics = PromptMetricsLogger()
+
+# Bump when the /chatbot prompt template changes so the dashboard can compare
+# performance across prompt revisions.
+PROMPT_VERSION = "seattle-restaurants-v1"
 
 # Load prompt suggestions
 try:
@@ -47,13 +60,22 @@ PROJECT_NAME = os.getenv("PROJECT_NAME")
 LOCATION = os.getenv("LOCATION")
 ENDPOINT_ID = os.getenv("ENDPOINT_ID")
 
-bq_client = bigquery.Client(project=PROJECT_ID)
-vertexai.init(project=PROJECT_NAME, location=LOCATION)
-model = GenerativeModel(os.getenv("FINE_TUNED_MODEL"))
-aiplatform.init(
-    project=PROJECT_ID,
-    location=LOCATION
-)
+# GCP clients need credentials. If they're missing (e.g. local dev without a
+# service account), don't crash the whole app at import — routes that don't
+# touch GCP (like /prompt-dashboard) should still work. GCP-backed routes will
+# surface a clear error at call time instead.
+bq_client = None
+model = None
+try:
+    bq_client = bigquery.Client(project=PROJECT_ID)
+    vertexai.init(project=PROJECT_NAME, location=LOCATION)
+    model = GenerativeModel(os.getenv("FINE_TUNED_MODEL"))
+    aiplatform.init(
+        project=PROJECT_ID,
+        location=LOCATION
+    )
+except Exception as exc:
+    logger.warning(f"GCP clients not initialized ({exc}); GCP-backed routes will be unavailable.")
 
 # FastAPI app instance
 app = FastAPI(debug=True)
@@ -202,12 +224,36 @@ async def chat_view(request: Request):
     return templates.TemplateResponse("chat.html", {"request": request})
 
 
+@app.get("/prompt-dashboard", response_class=HTMLResponse)
+async def prompt_dashboard(request: Request, days: int = 7):
+    """Prompt performance dashboard: latency, token usage & error rate per prompt version."""
+    return templates.TemplateResponse("prompt_dashboard.html", {
+        "request": request,
+        "days": days,
+        "current_prompt_version": PROMPT_VERSION,
+        "summary": prompt_metrics.summary(since_days=days),
+        "recent": prompt_metrics.recent(limit=50),
+    })
+
+
 '''
 Vectorize messages with Cosine sim
 '''
 def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
-    """Search for similar restaurants using BigQuery vector search"""
-    
+    """Search for similar restaurants using BigQuery vector search.
+
+    Returns an empty list (rather than raising) if BigQuery is unavailable, so a
+    transient/config failure in the vector DB degrades Kai to a general answer
+    instead of failing the whole /chatbot request with a 500.
+    """
+
+    if bq_client is None:
+        logger.error(
+            "vector_search_restaurants: BigQuery client is not initialized "
+            "(check PROJECT_ID / GOOGLE_APPLICATION_CREDENTIALS). Returning no results."
+        )
+        return []
+
     sql = f"""
         SELECT DISTINCT
         base.restaurant,
@@ -231,9 +277,8 @@ def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
             STRUCT(TRUE AS flatten_json_output)
             )
         ),
-        top_k => 30
+        top_k => @top_k
         )
-        LIMIT 10
     """
 
     job_config = bigquery.QueryJobConfig(
@@ -243,8 +288,12 @@ def vector_search_restaurants(query_text: str, top_k: int = 10) -> list:
         ]
     )
 
-    results = bq_client.query(sql, job_config=job_config).to_dataframe()
-    return results.to_dict('records')
+    try:
+        results = bq_client.query(sql, job_config=job_config).to_dataframe()
+        return results.to_dict('records')
+    except Exception as exc:
+        logger.exception(f"vector_search_restaurants failed: {exc}")
+        return []
 
 
 '''
@@ -411,18 +460,23 @@ async def chatbot(request: Request):
     # caller cannot pull another user's health data by guessing a core_user_uuid.
     core_user_uuid, bearer_token = resolve_identity(request.headers.get("Authorization"))
 
-    # User health profile + wearable biometrics from user_service (optional)
+    # User health profile + wearable biometrics from user_service (optional).
+    # Personalization is best-effort: never let it fail the chat with a 500.
     user_context_block = ""
     if core_user_uuid:
-        user_ctx = await fetch_user_context(core_user_uuid, bearer_token=bearer_token)
-        user_context_block = format_user_context(user_ctx)
-        # Deterministic MAI scores (SCORING.md): persist today's snapshot and
-        # inject the block to weight recommendations.
-        score_block = upsert_daily_scores(user_ctx, core_user_uuid)
-        if score_block:
-            user_context_block = (
-                f"{user_context_block}\n\n{score_block}" if user_context_block else score_block
-            )
+        try:
+            user_ctx = await fetch_user_context(core_user_uuid, bearer_token=bearer_token)
+            user_context_block = format_user_context(user_ctx)
+            # Deterministic MAI scores (SCORING.md): persist today's snapshot and
+            # inject the block to weight recommendations.
+            score_block = upsert_daily_scores(user_ctx, core_user_uuid)
+            if score_block:
+                user_context_block = (
+                    f"{user_context_block}\n\n{score_block}" if user_context_block else score_block
+                )
+        except Exception as exc:
+            logger.exception(f"/chatbot user-context enrichment failed: {exc}")
+            user_context_block = ""
 
     # Similarity Search from BigQuery vectorDB
     search_results = vector_search_restaurants(
@@ -441,11 +495,52 @@ async def chatbot(request: Request):
     response_logger.insert_message(session_id, "user", user_message)
 
     # response = generate_from(full_prompt, project_id, location, endpoint_id)
-    response = generate_from_v2(user_message, search_results, project_id, location, endpoint_id, user_context_block)
+    _t0 = time.perf_counter()
+    try:
+        response = generate_from_v2(user_message, search_results, project_id, location, endpoint_id, user_context_block)
+        _err = None
+    except Exception as exc:
+        _err = str(exc)
+        # Log the real cause server-side (Vertex/config/quota) for diagnosis...
+        logger.exception(f"/chatbot generation failed: {exc}")
+        prompt_metrics.log(
+            session_id=session_id, prompt_version=PROMPT_VERSION,
+            model_version=None, user_message=user_message,
+            response_preview=None, token_count=None,
+            latency_ms=int((time.perf_counter() - _t0) * 1000),
+            num_search_results=len(search_results or []),
+            user_context=user_context_block, error=_err,
+        )
+        # ...but return a friendly reply instead of an opaque 500 so the app
+        # shows a graceful "try again" message rather than "Server error."
+        fallback_msg = (
+            "Sorry, I'm having trouble thinking right now. "
+            "Please try again in a moment."
+        )
+        response_logger.insert_message(session_id, "bot", fallback_msg)
+        return {
+            'prompt': full_prompt,
+            'user_prompt': user_message,
+            'kai_response': fallback_msg,
+            'model_version': None,
+            'history': "",
+            'tokens': tokens,
+        }
+    latency_ms = int((time.perf_counter() - _t0) * 1000)
     response_dict = response
 
     message_logger.log_message(user_message, session_id)
-    
+
     response_logger.insert_message(session_id, "bot", response_dict['text'])
+
+    prompt_metrics.log(
+        session_id=session_id, prompt_version=PROMPT_VERSION,
+        model_version=response_dict.get('model_version'),
+        user_message=user_message, response_preview=response_dict.get('text'),
+        token_count=response_dict.get('total_token_count'),
+        latency_ms=latency_ms,
+        num_search_results=len(search_results or []),
+        user_context=user_context_block, error=None,
+    )
 
     return {'prompt': full_prompt, 'user_prompt': user_message, 'kai_response': response_dict['text'], 'model_version': response_dict['model_version'], 'history': "response_logger.select_all_messages(session_id)", 'tokens': response_dict['total_token_count']}
