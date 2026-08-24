@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt Performance Dashboard</title>
+    <style>
+        :root { --bg:#0f1419; --card:#1a2029; --line:#2a323d; --fg:#e6e9ee; --muted:#8a93a2; --accent:#4f9dff; --bad:#ff6b6b; }
+        * { box-sizing: border-box; }
+        body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+        header { padding:24px 32px; border-bottom:1px solid var(--line); }
+        h1 { margin:0 0 4px; font-size:20px; }
+        .sub { color:var(--muted); font-size:13px; }
+        .sub code { color:var(--accent); }
+        main { padding:24px 32px; }
+        .controls { margin-bottom:20px; font-size:13px; color:var(--muted); }
+        .controls a { color:var(--accent); text-decoration:none; margin-right:12px; }
+        .controls a.active { font-weight:600; text-decoration:underline; }
+        h2 { font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:28px 0 12px; }
+        table { width:100%; border-collapse:collapse; background:var(--card); border-radius:8px; overflow:hidden; font-size:13px; }
+        th, td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); }
+        th { color:var(--muted); font-weight:600; font-size:12px; }
+        tr:last-child td { border-bottom:none; }
+        td.num { text-align:right; font-variant-numeric:tabular-nums; }
+        .err { color:var(--bad); }
+        .msg { max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .empty { color:var(--muted); padding:20px 0; }
+        details.ctx { max-width:360px; }
+        details.ctx summary { cursor:pointer; color:var(--accent); font-size:12px; }
+        details.ctx pre { white-space:pre-wrap; word-break:break-word; margin:8px 0 0; padding:8px; background:var(--bg); border:1px solid var(--line); border-radius:6px; font-size:11px; color:var(--fg); max-height:220px; overflow:auto; }
+        .none { color:var(--muted); font-size:12px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Prompt Performance Dashboard</h1>
+        <div class="sub">Current prompt version: <code>{{ current_prompt_version }}</code> &middot; window: last {{ days }} day(s)</div>
+    </header>
+    <main>
+        <div class="controls">
+            Window:
+            <a href="?days=1" class="{{ 'active' if days == 1 else '' }}">1d</a>
+            <a href="?days=7" class="{{ 'active' if days == 7 else '' }}">7d</a>
+            <a href="?days=30" class="{{ 'active' if days == 30 else '' }}">30d</a>
+        </div>
+
+        <h2>By prompt version</h2>
+        {% if summary %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Prompt version</th>
+                    <th class="num">Turns</th>
+                    <th class="num">Avg latency (ms)</th>
+                    <th class="num">Avg tokens</th>
+                    <th class="num">Total tokens</th>
+                    <th class="num">Errors</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in summary %}
+                <tr>
+                    <td>{{ row.prompt_version }}</td>
+                    <td class="num">{{ row.turns }}</td>
+                    <td class="num">{{ '%.0f'|format(row.avg_latency_ms or 0) }}</td>
+                    <td class="num">{{ '%.0f'|format(row.avg_tokens or 0) }}</td>
+                    <td class="num">{{ row.total_tokens or 0 }}</td>
+                    <td class="num {{ 'err' if row.errors else '' }}">{{ row.errors }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">No prompt turns recorded in this window yet.</div>
+        {% endif %}
+
+        <h2>Recent turns</h2>
+        {% if recent %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>Prompt ver.</th>
+                    <th>Model</th>
+                    <th>User message</th>
+                    <th>Profile context pulled</th>
+                    <th class="num">Tokens</th>
+                    <th class="num">Latency</th>
+                    <th class="num">Results</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent %}
+                <tr>
+                    <td>{{ r.created_at[:19].replace('T', ' ') }}</td>
+                    <td>{{ r.prompt_version }}</td>
+                    <td>{{ r.model_version or '—' }}</td>
+                    <td class="msg" title="{{ r.user_message }}">{{ r.user_message }}</td>
+                    <td>
+                        {% if r.user_context %}
+                        <details class="ctx"><summary>view context</summary><pre>{{ r.user_context }}</pre></details>
+                        {% else %}
+                        <span class="none">none pulled</span>
+                        {% endif %}
+                    </td>
+                    <td class="num">{{ r.token_count if r.token_count is not none else '—' }}</td>
+                    <td class="num">{{ r.latency_ms if r.latency_ms is not none else '—' }}</td>
+                    <td class="num">{{ r.num_search_results if r.num_search_results is not none else '—' }}</td>
+                    <td class="err">{{ r.error or '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">No turns logged yet. Send a message through /chatbot to populate this.</div>
+        {% endif %}
+    </main>
+</body>
+</html>
