@@ -44,6 +44,20 @@ message_logger = MessageLogger()
 response_logger = ChatLogger()
 prompt_metrics = PromptMetricsLogger()
 
+
+def _safe_log(label, fn, *args, **kwargs):
+    """Best-effort logging/metrics write.
+
+    Chat-history and metrics persistence must never fail a user-facing chat
+    response. If the logging DB is unreachable (bad creds, pg_hba/SSL, outage),
+    swallow and log a warning so /chatbot still returns Kai's answer.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        logger.warning(f"{label} failed (non-fatal): {exc}")
+        return None
+
 # Bump when the /chatbot prompt template changes so the dashboard can compare
 # performance across prompt revisions.
 PROMPT_VERSION = "seattle-restaurants-v1"
@@ -187,7 +201,11 @@ async def pre_user_prompt(request: Request):
     data = await request.json()
     session_id = data.get("session_id")
     suggested_prompts = sample(prompt_list, min(4, len(prompt_list)))
-    chat_records = response_logger.select_all_messages(session_id)
+    # Chat history is best-effort: if the DB is unreachable, still return
+    # suggestions rather than failing the Kai screen with a 500.
+    chat_records = _safe_log(
+        "select chat history", response_logger.select_all_messages, session_id
+    ) or []
     prompt_history = [serialize_chat(chat) for chat in chat_records]
     return {
         "suggested_prompts": suggested_prompts,
@@ -492,7 +510,7 @@ async def chatbot(request: Request):
     
     # print(user_message)
 
-    response_logger.insert_message(session_id, "user", user_message)
+    _safe_log("insert user message", response_logger.insert_message, session_id, "user", user_message)
 
     # response = generate_from(full_prompt, project_id, location, endpoint_id)
     _t0 = time.perf_counter()
@@ -503,7 +521,8 @@ async def chatbot(request: Request):
         _err = str(exc)
         # Log the real cause server-side (Vertex/config/quota) for diagnosis...
         logger.exception(f"/chatbot generation failed: {exc}")
-        prompt_metrics.log(
+        _safe_log(
+            "prompt_metrics (error)", prompt_metrics.log,
             session_id=session_id, prompt_version=PROMPT_VERSION,
             model_version=None, user_message=user_message,
             response_preview=None, token_count=None,
@@ -517,7 +536,7 @@ async def chatbot(request: Request):
             "Sorry, I'm having trouble thinking right now. "
             "Please try again in a moment."
         )
-        response_logger.insert_message(session_id, "bot", fallback_msg)
+        _safe_log("insert bot fallback", response_logger.insert_message, session_id, "bot", fallback_msg)
         return {
             'prompt': full_prompt,
             'user_prompt': user_message,
@@ -529,11 +548,12 @@ async def chatbot(request: Request):
     latency_ms = int((time.perf_counter() - _t0) * 1000)
     response_dict = response
 
-    message_logger.log_message(user_message, session_id)
+    _safe_log("message_logger", message_logger.log_message, user_message, session_id)
 
-    response_logger.insert_message(session_id, "bot", response_dict['text'])
+    _safe_log("insert bot message", response_logger.insert_message, session_id, "bot", response_dict['text'])
 
-    prompt_metrics.log(
+    _safe_log(
+        "prompt_metrics", prompt_metrics.log,
         session_id=session_id, prompt_version=PROMPT_VERSION,
         model_version=response_dict.get('model_version'),
         user_message=user_message, response_preview=response_dict.get('text'),
