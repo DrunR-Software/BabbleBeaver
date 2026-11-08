@@ -26,7 +26,7 @@ from message_logger import MessageLogger
 from response_logger import ChatLogger
 from prompt_metrics import PromptMetricsLogger
 from user_context import fetch_user_context, format_user_context, resolve_identity
-from daily_scores import upsert_daily_scores
+from daily_scores import upsert_daily_scores, delete_user_scores
 
 from google.cloud import aiplatform, bigquery
 import vertexai
@@ -463,6 +463,33 @@ def generate_from_v2(user_query: str, search_results: list, project_id, location
     }
     
     return parsed_output
+
+
+@app.delete("/purge-user")
+async def purge_user(request: Request):
+    """Permanently erase the authenticated user's Kai chat history and MAI score
+    snapshots (account-deletion / right-to-erasure).
+
+    Identity is taken from the signed bearer token via ``resolve_identity`` —
+    never from the request body — so a caller can only erase their own data.
+    Each store is purged best-effort so a single failure does not abort the
+    teardown; the response reports how many rows were removed from each.
+    """
+    core_user_uuid, _ = resolve_identity(request.headers.get("Authorization"))
+    if not core_user_uuid:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    chats_deleted = _safe_log(
+        "purge chat history", response_logger.delete_session, core_user_uuid
+    )
+    scores_deleted = _safe_log(
+        "purge daily scores", delete_user_scores, core_user_uuid
+    )
+    return {
+        "core_user_uuid": core_user_uuid,
+        "chats_deleted": chats_deleted or 0,
+        "daily_scores_deleted": scores_deleted or 0,
+    }
 
 
 @app.post("/chatbot")
