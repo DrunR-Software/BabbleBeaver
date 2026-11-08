@@ -36,7 +36,11 @@ numpy
 scikit-learn
 scipy
 matplotlib
-sqlalchemy
+# Pin <2.1: SQLAlchemy 2.1 defaults a bare `postgresql://` URL to the psycopg
+# (v3) driver, which is not installed here (we ship psycopg2-binary), so
+# create_engine() crashes at import and the whole service crash-loops (502).
+# 2.0.x keeps psycopg2 as the default driver.
+sqlalchemy<2.1
 psycopg2-binary
 cloud-sql-python-connector[pg8000]
 google-auth
