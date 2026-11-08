@@ -34,8 +34,16 @@ class ChatLogger:
     def __init__(self, table_name='user_chats'):
         self.table_name = table_name
 
-        # Create table(s)
-        Base.metadata.create_all(bind=engine)
+        # Create table(s). Fail-open: this runs at import time (main.py's
+        # module-level `response_logger = ChatLogger()`), so raising here would
+        # crash startup and take the whole service down (crash-loop / 502)
+        # whenever DATABASE_URL is unreachable or unset (the localhost default
+        # won't resolve in prod). Log and continue; reads/writes are already
+        # guarded by `_safe_log` at the call sites.
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as e:
+            print(f"⚠️  ChatLogger: could not create/verify tables, continuing without DB: {e}")
 
     def select_all_messages(self, session_id):
         print("session_id:", session_id)

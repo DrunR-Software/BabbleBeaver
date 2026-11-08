@@ -162,13 +162,20 @@ class DatabaseManager:
         self._create_tables()
     
     def _create_tables(self):
-        """Create all tables if they don't exist."""
+        """Create all tables if they don't exist.
+
+        Fail-open: this runs at import time (the module-level ``db_manager``), so
+        raising here would crash app startup and take the whole service down
+        (crash-loop / 502) whenever the database is briefly unreachable or
+        misconfigured. We log and continue instead; individual queries are
+        already guarded by ``_safe_log`` at the call sites, so chat keeps working
+        and table creation is retried on the next boot.
+        """
         try:
             Base.metadata.create_all(bind=self.engine)
             logger.info("Database tables created/verified")
         except Exception as e:
-            logger.error(f"Error creating database tables: {e}")
-            raise
+            logger.error(f"Error creating database tables (continuing without DB): {e}")
     
     @contextmanager
     def get_session(self) -> Session:
