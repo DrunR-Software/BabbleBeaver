@@ -87,6 +87,26 @@ def get_daily_scores(
         return None
 
 
+def delete_user_scores(core_user_uuid: str) -> int:
+    """Delete every persisted daily-score snapshot for a user.
+
+    Used by the account-deletion flow. Returns the number of rows removed; any
+    DB error is logged and surfaces as 0 so account teardown is never blocked.
+    """
+    if not core_user_uuid:
+        return 0
+    try:
+        with db_manager.get_session() as session:
+            return (
+                session.query(DailyScore)
+                .filter_by(core_user_uuid=core_user_uuid)
+                .delete(synchronize_session=False)
+            )
+    except Exception as e:
+        logger.warning("Failed to delete daily scores for %s: %s", core_user_uuid, e)
+        return 0
+
+
 def get_score_history(
     core_user_uuid: str, days: int = 30
 ) -> List[Dict[str, Any]]:

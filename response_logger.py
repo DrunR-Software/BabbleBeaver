@@ -48,6 +48,26 @@ class ChatLogger:
         finally:
             db.close()
 
+    def delete_session(self, session_id):
+        """Delete all chat history for a session.
+
+        In DrunR the chat ``session_id`` is the user's ``core_user_uuid`` (see
+        the app's KaiChatScreen), so this erases a single user's Kai history on
+        account deletion. Returns the number of rows removed.
+        """
+        db = SessionLocal()
+        try:
+            deleted = (
+                db.query(ChatHistory)
+                .filter(ChatHistory.session_id == session_id)
+                .delete(synchronize_session=False)
+            )
+            db.commit()
+            print(f"🗑️  Deleted {deleted} chat rows for {session_id}")
+            return deleted
+        finally:
+            db.close()
+
     def insert_message(self, session_id, sender, message):
         db = SessionLocal()
         try:
